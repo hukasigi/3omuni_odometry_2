@@ -1,6 +1,7 @@
 #include "PositionPID.h"
 #include "SpeedPID.h"
 #include <Arduino.h>
+#include <ArduinoEigen.h>
 #include <ESP32Encoder.h>
 #include <PS4Controller.h>
 #include <WiFi.h>
@@ -196,38 +197,12 @@ class Odometry {
         long prev_count2_{0};
         long prev_count3_{0};
 
-        Position pos_{0., 0., 0.};
-        Position vel_{0., 0., 0.};
+        Position        pos_{0., 0., 0.};
+        Position        vel_{0., 0., 0.};
+        bool            inv_ok_{false};
+        Eigen::Matrix3d invA_{Eigen::Matrix3d::Zero()};
 
-        bool   inv_ok_{false};
-        double invA_[3][3]{};
-
-        static bool Invert3x3(const double A[3][3], double invA[3][3]) {
-
-            // 行列式
-            const double det = A[0][0] * (A[1][1] * A[2][2] - A[1][2] * A[2][1]) -
-                               A[0][1] * (A[1][0] * A[2][2] - A[1][2] * A[2][0]) +
-                               A[0][2] * (A[1][0] * A[2][1] - A[1][1] * A[2][0]);
-
-            // 1e-12は不動点数誤差を考慮した無視できる値
-            if (fabs(det) < 1e-12) return false;
-            const double invDet = 1.0 / det;
-
-            invA[0][0] = (A[1][1] * A[2][2] - A[1][2] * A[2][1]) * invDet;
-            invA[0][1] = (A[0][2] * A[2][1] - A[0][1] * A[2][2]) * invDet;
-            invA[0][2] = (A[0][1] * A[1][2] - A[0][2] * A[1][1]) * invDet;
-
-            invA[1][0] = (A[1][2] * A[2][0] - A[1][0] * A[2][2]) * invDet;
-            invA[1][1] = (A[0][0] * A[2][2] - A[0][2] * A[2][0]) * invDet;
-            invA[1][2] = (A[0][2] * A[1][0] - A[0][0] * A[1][2]) * invDet;
-
-            invA[2][0] = (A[1][0] * A[2][1] - A[1][1] * A[2][0]) * invDet;
-            invA[2][1] = (A[0][1] * A[2][0] - A[0][0] * A[2][1]) * invDet;
-            invA[2][2] = (A[0][0] * A[1][1] - A[0][1] * A[1][0]) * invDet;
-
-            return true;
-        }
-
+        // Invert3x3 を置き換え、Eigen を使って逆行列を作る
         void buildInverse_() {
             const double a1 = 135.0 * PI / 180.0;
             const double a2 = 225.0 * PI / 180.0;
@@ -240,23 +215,24 @@ class Odometry {
             // 右回りが + なので回転寄与の符号を反転
             const double k = +ROBOT_TO_ODO_RADIUS;
 
-            const double A[3][3] = {
-                {c1, sn1, k},
-                {c2, sn2, k},
-                {c3, sn3, k},
-            };
+            Eigen::Matrix3d A;
+            A << c1, sn1, k, c2, sn2, k, c3, sn3, k;
 
-            inv_ok_ = Invert3x3(A, invA_);
+            const double det = A.determinant();
+            if (fabs(det) < 1e-12) {
+                inv_ok_ = false;
+            } else {
+                invA_   = A.inverse();
+                inv_ok_ = true;
+            }
         }
 
         Position WheelDeltaToBodyDelta(double s1_mm, double s2_mm, double s3_mm) const {
             if (!inv_ok_) return {0.0, 0.0, 0.0};
 
-            const double dx     = invA_[0][0] * s1_mm + invA_[0][1] * s2_mm + invA_[0][2] * s3_mm;
-            const double dy     = invA_[1][0] * s1_mm + invA_[1][1] * s2_mm + invA_[1][2] * s3_mm;
-            const double dtheta = invA_[2][0] * s1_mm + invA_[2][1] * s2_mm + invA_[2][2] * s3_mm;
-
-            return {dx, dy, dtheta};
+            Eigen::Vector3d s(s1_mm, s2_mm, s3_mm);
+            Eigen::Vector3d res = invA_ * s;
+            return {res(0), res(1), res(2)};
         }
 
         Position CountToBody(long dc1, long dc2, long dc3) const {
@@ -530,4 +506,3 @@ void loop() {
     odometry.update(dt);
     robot.update(dt);
 }
-// eigen
