@@ -44,8 +44,8 @@ const int16_t PWM_LIMIT           = 255;
 const double  INTEGRAL_MAX        = 10.0;
 const double  MAX_OMEGA_CMD_RAD_S = 1.; // 角速度上限[rad/s]
 
-PositionPid x_pos_pid(0.5, 0., 0.0, -MAX_VX_CMD_MM_S, MAX_VX_CMD_MM_S, -INTEGRAL_MAX, INTEGRAL_MAX);
-PositionPid y_pos_pid(0.5, 0., 0.0, -MAX_VY_CMD_MM_S, MAX_VY_CMD_MM_S, -INTEGRAL_MAX, INTEGRAL_MAX);
+PositionPid x_pos_pid(0.8, 0., 0.0, -MAX_VX_CMD_MM_S, MAX_VX_CMD_MM_S, -INTEGRAL_MAX, INTEGRAL_MAX);
+PositionPid y_pos_pid(0.8, 0., 0.0, -MAX_VY_CMD_MM_S, MAX_VY_CMD_MM_S, -INTEGRAL_MAX, INTEGRAL_MAX);
 PositionPid theta_pos_pid(0.5, 0., 0.0, -MAX_OMEGA_CMD_RAD_S, MAX_OMEGA_CMD_RAD_S, -INTEGRAL_MAX, INTEGRAL_MAX);
 
 struct Position {
@@ -530,3 +530,4 @@ void loop() {
     odometry.update(dt);
     robot.update(dt);
 }
+// eigen
