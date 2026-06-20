@@ -377,8 +377,7 @@ class Robot {
             target.y     = (double)cy;
             target.theta = WrapPi((double)cth / 1000.0);
 
-            const bool cmd_changed = (!cmd_initialized_) ||
-                                     (fabs(target.x - cmd_x_mm_) > 0.5) ||
+            const bool cmd_changed = (!cmd_initialized_) || (fabs(target.x - cmd_x_mm_) > 0.5) ||
                                      (fabs(target.y - cmd_y_mm_) > 0.5) ||
                                      (fabs(WrapPi(target.theta - cmd_theta_rad_)) > (1.0 * PI / 180.0));
 
@@ -405,14 +404,14 @@ class Robot {
             const double now_vx_world = ct * nowVel.x - st * nowVel.y;
             const double now_vy_world = st * nowVel.x + ct * nowVel.y;
 
-            const double dx   = target.x - nowPos.x;
-            const double dy   = target.y - nowPos.y;
-            const double dist = hypot(dx, dy);
+            const double dx     = target.x - nowPos.x;
+            const double dy     = target.y - nowPos.y;
+            const double dist   = hypot(dx, dy);
             const double th_err = WrapPi(target.theta - nowPos.theta);
 
             // 停止ラッチ解除
             if (dist > POS_DEADZONE_MM * 2.0 || fabs(th_err) > THETA_RELEASE_RAD) {
-                stopped_ = false;
+                stopped_                 = false;
                 stop_candidate_since_ms_ = 0;
             }
 
@@ -425,7 +424,7 @@ class Robot {
                 const double ux = dx / dist;
                 const double uy = dy / dist;
 
-                const double v_now_along = std::max(0.0, now_vx_world * ux + now_vy_world * uy);
+                const double v_now_along  = std::max(0.0, now_vx_world * ux + now_vy_world * uy);
                 const double dec_distance = (v_now_along * v_now_along) / (2.0 * LIN_MAX_ACC_MM_S2);
 
                 if (dist <= dec_distance + POS_DEADZONE_MM) {
@@ -436,33 +435,24 @@ class Robot {
 
                 double next_v = 0.0;
                 switch (state_) {
-                    case State::Accelerate:
-                        next_v = std::min(v_now_along + LIN_MAX_ACC_MM_S2 * dt, LIN_MAX_VEL_MM_S);
-                        break;
-                    case State::Decelerate:
-                        next_v = std::max(v_now_along - LIN_MAX_ACC_MM_S2 * dt, 0.0);
-                        break;
-                    case State::Stop:
-                        next_v = 0.0;
-                        break;
+                case State::Accelerate: next_v = std::min(v_now_along + LIN_MAX_ACC_MM_S2 * dt, LIN_MAX_VEL_MM_S); break;
+                case State::Decelerate: next_v = std::max(v_now_along - LIN_MAX_ACC_MM_S2 * dt, 0.0); break;
+                case State::Stop: next_v = 0.0; break;
                 }
 
                 vx_target_world = ux * next_v;
                 vy_target_world = uy * next_v;
             }
 
-            const bool stop_condition =
-                (dist < POS_DEADZONE_MM) &&
-                (fabs(th_err) < THETA_STOP_RAD) &&
-                (fabs(nowVel.theta) < OMEGA_STOP_RAD_S) &&
-                (hypot(nowVel.x, nowVel.y) < V_STOP_MM_S);
+            const bool stop_condition = (dist < POS_DEADZONE_MM) && (fabs(th_err) < THETA_STOP_RAD) &&
+                                        (fabs(nowVel.theta) < OMEGA_STOP_RAD_S) && (hypot(nowVel.x, nowVel.y) < V_STOP_MM_S);
 
             if (!stopped_) {
                 if (stop_condition) {
                     if (!stop_candidate_since_ms_) stop_candidate_since_ms_ = millis();
                     if (millis() - stop_candidate_since_ms_ >= 500) {
                         stopped_ = true;
-                        state_ = State::Stop;
+                        state_   = State::Stop;
                     }
                 } else {
                     stop_candidate_since_ms_ = 0;
@@ -493,15 +483,11 @@ class Robot {
             motor_pwm = omni_wheels.move(vx_body, vy_body, omega);
 
             static unsigned long last_send_ms = 0;
-            unsigned long ms = millis();
+            unsigned long        ms           = millis();
             if ((long)(ms - last_send_ms) >= 100) {
-                last_send_ms = ms;
-                esp_err_t res = esp_now.send(
-                    (int16_t)lround(nowPos.x),
-                    (int16_t)lround(nowPos.y),
-                    (int16_t)lround(nowPos.theta * 1000.0),
-                    motor_pwm.m1, motor_pwm.m2, motor_pwm.m3
-                );
+                last_send_ms  = ms;
+                esp_err_t res = esp_now.send((int16_t)lround(nowPos.x), (int16_t)lround(nowPos.y),
+                                             (int16_t)lround(nowPos.theta * 1000.0), motor_pwm.m1, motor_pwm.m2, motor_pwm.m3);
                 if (res != ESP_OK) {
                     Serial.printf("esp_now_send err=%d\n", res);
                 }
@@ -529,7 +515,9 @@ class Robot {
         const double THETA_RELEASE_RAD = 5.0 * PI / 180.0;
         const double OMEGA_STOP_RAD_S  = 0.05;
         const double V_STOP_MM_S       = 1.0;
-        const double LIN_MAX_VEL_MM_S  = 120.0;
+        // 直線の最大速度
+        const double LIN_MAX_VEL_MM_S = 120.0;
+        // 直線の最大加速度
         const double LIN_MAX_ACC_MM_S2 = 120.0;
 
         unsigned long stop_candidate_since_ms_{0};
@@ -539,3 +527,45 @@ class Robot {
         double cmd_y_mm_{0.0};
         double cmd_theta_rad_{0.0};
 };
+
+Motor m1(PIN_DIR_1, PIN_PWM_1, W1_CH, W1_SIGN);
+Motor m2(PIN_DIR_2, PIN_PWM_2, W2_CH, W2_SIGN);
+Motor m3(PIN_DIR_3, PIN_PWM_3, W3_CH, W3_SIGN);
+
+Odometry odometry(enc1, enc2, enc3);
+
+OmniWheel w1(m1, W1_ANGLE);
+OmniWheel w2(m2, W2_ANGLE);
+OmniWheel w3(m3, W3_ANGLE);
+
+OmniWheels omuni(w1, w2, w3);
+
+DataSend esp_now;
+
+Robot robot(omuni, odometry, esp_now);
+
+constexpr long US_CONTROL_CYCLE = 5000;
+
+unsigned long last = micros();
+
+void setup() {
+    Serial.begin(115200);
+    m1.begin();
+    m2.begin();
+    m3.begin();
+    odometry.begin();
+    esp_now.begin();
+
+    last = micros();
+}
+
+void loop() {
+    unsigned long now = micros();
+
+    if (now - last < US_CONTROL_CYCLE) return;
+    double dt = (now - last) * 1.e-6;
+    last      = now;
+
+    odometry.update(dt);
+    robot.update(dt);
+}
