@@ -39,15 +39,18 @@ const double COUNTS_PER_MM = (ENC_RESOLUTION * GEAR_RATIO) / (PI * OD_RADIUS * 2
 
 ESP32Encoder enc1, enc2, enc3;
 
-const double  MAX_VX_CMD_MM_S     = 255.0;
-const double  MAX_VY_CMD_MM_S     = 255.0;
+const double  MAX_VX_CMD_MM_S     = 200.0;
+const double  MAX_VY_CMD_MM_S     = 200.0;
 const int16_t PWM_LIMIT           = 255;
 const double  INTEGRAL_MAX        = 10.0;
 const double  MAX_OMEGA_CMD_RAD_S = 1.; // 角速度上限[rad/s]
 
-PositionPid x_pos_pid(0.8, 0., 0.0, -MAX_VX_CMD_MM_S, MAX_VX_CMD_MM_S, -INTEGRAL_MAX, INTEGRAL_MAX);
-PositionPid y_pos_pid(0.8, 0., 0.0, -MAX_VY_CMD_MM_S, MAX_VY_CMD_MM_S, -INTEGRAL_MAX, INTEGRAL_MAX);
-PositionPid theta_pos_pid(0.5, 0., 0.0, -MAX_OMEGA_CMD_RAD_S, MAX_OMEGA_CMD_RAD_S, -INTEGRAL_MAX, INTEGRAL_MAX);
+// PositionPid x_pos_pid(0.5, 0.4, 0.0, -MAX_VX_CMD_MM_S, MAX_VX_CMD_MM_S, -INTEGRAL_MAX, INTEGRAL_MAX);
+// PositionPid y_pos_pid(0.5, 0.4, 0.0, -MAX_VY_CMD_MM_S, MAX_VY_CMD_MM_S, -INTEGRAL_MAX, INTEGRAL_MAX);
+// PositionPid theta_pos_pid(0.5, 0.4, 0.0, -MAX_OMEGA_CMD_RAD_S, MAX_OMEGA_CMD_RAD_S, -INTEGRAL_MAX, INTEGRAL_MAX);
+PositionPid x_pos_pid(0.4, 1., 0.0, -MAX_VX_CMD_MM_S, MAX_VX_CMD_MM_S, -INTEGRAL_MAX, INTEGRAL_MAX);
+PositionPid y_pos_pid(0.4, 1., 0.0, -MAX_VY_CMD_MM_S, MAX_VY_CMD_MM_S, -INTEGRAL_MAX, INTEGRAL_MAX);
+PositionPid theta_pos_pid(0.5, 0.4, 0.0, -MAX_OMEGA_CMD_RAD_S, MAX_OMEGA_CMD_RAD_S, -INTEGRAL_MAX, INTEGRAL_MAX);
 
 struct Position {
         double x;
@@ -153,6 +156,13 @@ class Odometry {
             const long dc2 = (c2 - prev_count2_) * ENCODER_SIGN_2;
             const long dc3 = (c3 - prev_count3_) * ENCODER_SIGN_3;
 
+            if (labs(dc1) > 200 || labs(dc2) > 200 || labs(dc3) > 200) {
+                prev_count1_ = c1;
+                prev_count2_ = c2;
+                prev_count3_ = c3;
+                return;
+            }
+
             prev_count1_ = c1;
             prev_count2_ = c2;
             prev_count3_ = c3;
@@ -218,6 +228,7 @@ class Odometry {
             Eigen::Matrix3d A;
             A << c1, sn1, k, c2, sn2, k, c3, sn3, k;
 
+            // 行列式
             const double det = A.determinant();
             if (fabs(det) < 1e-12) {
                 inv_ok_ = false;
