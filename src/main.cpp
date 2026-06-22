@@ -43,12 +43,13 @@ const double  MAX_VX_CMD_MM_S     = 200.0;
 const double  MAX_VY_CMD_MM_S     = 200.0;
 const int16_t PWM_LIMIT           = 255;
 const double  INTEGRAL_MAX        = 10.0;
-const double  MAX_OMEGA_CMD_RAD_S = 1.0;
+const double  MAX_OMEGA_CMD_RAD_S = 1.; // 角速度上限[rad/s]
 
-// 線速度用PID
-SpeedPID x_speed_pid(0.8, 0.0, 0.0, -MAX_VX_CMD_MM_S, MAX_VX_CMD_MM_S);
-SpeedPID y_speed_pid(0.8, 0.0, 0.0, -MAX_VY_CMD_MM_S, MAX_VY_CMD_MM_S);
-// 角度は今まで通り
+// PositionPid x_pos_pid(0.5, 0.4, 0.0, -MAX_VX_CMD_MM_S, MAX_VX_CMD_MM_S, -INTEGRAL_MAX, INTEGRAL_MAX);
+// PositionPid y_pos_pid(0.5, 0.4, 0.0, -MAX_VY_CMD_MM_S, MAX_VY_CMD_MM_S, -INTEGRAL_MAX, INTEGRAL_MAX);
+// PositionPid theta_pos_pid(0.5, 0.4, 0.0, -MAX_OMEGA_CMD_RAD_S, MAX_OMEGA_CMD_RAD_S, -INTEGRAL_MAX, INTEGRAL_MAX);
+PositionPid x_pos_pid(0.4, 1., 0.0, -MAX_VX_CMD_MM_S, MAX_VX_CMD_MM_S, -INTEGRAL_MAX, INTEGRAL_MAX);
+PositionPid y_pos_pid(0.4, 1., 0.0, -MAX_VY_CMD_MM_S, MAX_VY_CMD_MM_S, -INTEGRAL_MAX, INTEGRAL_MAX);
 PositionPid theta_pos_pid(0.5, 0.4, 0.0, -MAX_OMEGA_CMD_RAD_S, MAX_OMEGA_CMD_RAD_S, -INTEGRAL_MAX, INTEGRAL_MAX);
 
 struct Position {
@@ -365,6 +366,8 @@ class Robot {
     public:
         Robot(OmniWheels& wheels, Odometry& odo, DataSend& esp_now) : omni_wheels(wheels), odometry(odo), esp_now(esp_now) {}
 
+        void set_target(Position position) { target = position; }
+
         void update(double dt) {
             int16_t cx, cy, cth;
             portENTER_CRITICAL(&targetMux);
@@ -386,99 +389,57 @@ class Robot {
                 cmd_x_mm_                = target.x;
                 cmd_y_mm_                = target.y;
                 cmd_theta_rad_           = target.theta;
-                state_                   = State::Accelerate;
                 stopped_                 = false;
                 stop_candidate_since_ms_ = 0;
-                x_speed_pid.reset();
-                y_speed_pid.reset();
+                x_pos_pid.reset();
+                y_pos_pid.reset();
                 theta_pos_pid.reset();
             }
 
             const Position nowPos = odometry.get_position();
             const Position nowVel = odometry.get_velocity();
 
-            const double ct = cos(nowPos.theta);
-            const double st = sin(nowPos.theta);
-
-            // body -> world
+            const double ct           = cos(nowPos.theta);
+            const double st           = sin(nowPos.theta);
             const double now_vx_world = ct * nowVel.x - st * nowVel.y;
             const double now_vy_world = st * nowVel.x + ct * nowVel.y;
 
-            const double dx     = target.x - nowPos.x;
-            const double dy     = target.y - nowPos.y;
-            const double dist   = hypot(dx, dy);
-            const double th_err = WrapPi(target.theta - nowPos.theta);
+            const double ex       = target.x - nowPos.x;
+            const double ey       = target.y - nowPos.y;
+            const double dist_err = hypot(ex, ey);
+            const double th_err   = WrapPi(target.theta - nowPos.theta);
 
-            // 停止ラッチ解除
-            if (dist > POS_DEADZONE_MM * 2.0 || fabs(th_err) > THETA_RELEASE_RAD) {
-                stopped_                 = false;
-                stop_candidate_since_ms_ = 0;
-            }
-
-            double vx_target_world = 0.0;
-            double vy_target_world = 0.0;
-
-            if (dist <= POS_DEADZONE_MM) {
-                state_ = State::Stop;
-            } else {
-                const double ux = dx / dist;
-                const double uy = dy / dist;
-
-                const double v_now_along  = std::max(0.0, now_vx_world * ux + now_vy_world * uy);
-                const double dec_distance = (v_now_along * v_now_along) / (2.0 * LIN_MAX_ACC_MM_S2);
-
-                if (dist <= dec_distance + POS_DEADZONE_MM) {
-                    state_ = State::Decelerate;
-                } else {
-                    state_ = State::Accelerate;
-                }
-
-                double next_v = 0.0;
-                switch (state_) {
-                case State::Accelerate: next_v = std::min(v_now_along + LIN_MAX_ACC_MM_S2 * dt, LIN_MAX_VEL_MM_S); break;
-                case State::Decelerate: next_v = std::max(v_now_along - LIN_MAX_ACC_MM_S2 * dt, 0.0); break;
-                case State::Stop: next_v = 0.0; break;
-                }
-
-                vx_target_world = ux * next_v;
-                vy_target_world = uy * next_v;
-            }
-
-            const bool stop_condition = (dist < POS_DEADZONE_MM) && (fabs(th_err) < THETA_STOP_RAD) &&
+            const bool stop_condition = (dist_err < POS_DEADZONE_MM) && (fabs(th_err) < THETA_STOP_RAD) &&
                                         (fabs(nowVel.theta) < OMEGA_STOP_RAD_S) && (hypot(nowVel.x, nowVel.y) < V_STOP_MM_S);
 
+            // stopped_中は「同じ指令では再開しない」
             if (!stopped_) {
                 if (stop_condition) {
                     if (!stop_candidate_since_ms_) stop_candidate_since_ms_ = millis();
                     if (millis() - stop_candidate_since_ms_ >= 500) {
                         stopped_ = true;
-                        state_   = State::Stop;
                     }
                 } else {
                     stop_candidate_since_ms_ = 0;
                 }
             }
 
-            double vx_world = 0.0;
-            double vy_world = 0.0;
-            double omega    = 0.0;
+            double vx_body = 0.0;
+            double vy_body = 0.0;
+            double omega   = 0.0;
 
             if (!stopped_) {
-                // 速度目標 -> 速度PID
-                vx_world = x_speed_pid.update(vx_target_world, now_vx_world, dt);
-                vy_world = y_speed_pid.update(vy_target_world, now_vy_world, dt);
+                const double vx_world = x_pos_pid.update(target.x, nowPos.x, dt);
+                const double vy_world = y_pos_pid.update(target.y, nowPos.y, dt);
+                omega                 = theta_pos_pid.update(target.theta, nowPos.theta, dt);
 
-                // 角度は位置PID
-                omega = theta_pos_pid.update(target.theta, nowPos.theta, dt);
+                vx_body = ct * vx_world + st * vy_world;
+                vy_body = -st * vx_world + ct * vy_world;
             } else {
-                x_speed_pid.reset();
-                y_speed_pid.reset();
+                x_pos_pid.reset();
+                y_pos_pid.reset();
                 theta_pos_pid.reset();
             }
-
-            // world -> body
-            const double vx_body = ct * vx_world + st * vy_world;
-            const double vy_body = -st * vx_world + ct * vy_world;
 
             motor_pwm = omni_wheels.move(vx_body, vy_body, omega);
 
@@ -495,31 +456,18 @@ class Robot {
         }
 
     private:
-        enum class State {
-            Accelerate,
-            Decelerate,
-            Stop,
-        };
-
         OmniWheels& omni_wheels;
         Odometry&   odometry;
         DataSend&   esp_now;
         Position    target{0., 0., 0.};
         pwm         motor_pwm{0, 0, 0};
+        bool        stopped_{false};
 
-        State state_{State::Stop};
-        bool  stopped_{false};
-
-        const double POS_DEADZONE_MM   = 1.0;
-        const double THETA_STOP_RAD    = 2.0 * PI / 180.0;
-        const double THETA_RELEASE_RAD = 5.0 * PI / 180.0;
-        const double OMEGA_STOP_RAD_S  = 0.05;
-        const double V_STOP_MM_S       = 1.0;
-        // 直線の最大速度
-        const double LIN_MAX_VEL_MM_S = 120.0;
-        // 直線の最大加速度
-        const double LIN_MAX_ACC_MM_S2 = 120.0;
-
+        const double  POS_DEADZONE_MM   = 1.0;
+        const double  THETA_STOP_RAD    = 2.0 * PI / 180.0;
+        const double  THETA_RELEASE_RAD = 5.0 * PI / 180.0;
+        const double  OMEGA_STOP_RAD_S  = 0.05;
+        const double  V_STOP_MM_S       = 1.0;
         unsigned long stop_candidate_since_ms_{0};
 
         bool   cmd_initialized_{false};
