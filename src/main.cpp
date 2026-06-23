@@ -45,9 +45,9 @@ const int16_t PWM_LIMIT           = 255;
 const double  INTEGRAL_MAX        = 10.0;
 const double  MAX_OMEGA_CMD_RAD_S = 1.; // 角速度上限[rad/s]
 
-SpeedPID    vx_pid(0.4, 0, 0.0, -MAX_VX_CMD_MM_S, MAX_VX_CMD_MM_S, -INTEGRAL_MAX, INTEGRAL_MAX);
-SpeedPID    vy_pid(0.4, 0, 0.0, -MAX_VY_CMD_MM_S, MAX_VY_CMD_MM_S, -INTEGRAL_MAX, INTEGRAL_MAX);
-PositionPid theta_pos_pid(0.5, 0.4, 0.0, -MAX_OMEGA_CMD_RAD_S, MAX_OMEGA_CMD_RAD_S, -INTEGRAL_MAX, INTEGRAL_MAX);
+SpeedPID    vx_pid(0.8, 0, 0.0, -MAX_VX_CMD_MM_S, MAX_VX_CMD_MM_S, -INTEGRAL_MAX, INTEGRAL_MAX);
+SpeedPID    vy_pid(0.8, 0, 0.0, -MAX_VY_CMD_MM_S, MAX_VY_CMD_MM_S, -INTEGRAL_MAX, INTEGRAL_MAX);
+PositionPid theta_pos_pid(0.2, 0., 0.0, -MAX_OMEGA_CMD_RAD_S, MAX_OMEGA_CMD_RAD_S, -INTEGRAL_MAX, INTEGRAL_MAX);
 
 struct Position {
         double x;
@@ -122,8 +122,8 @@ class Motor {
         uint8_t              pwmCh_;
         int8_t               direction_;
         int8_t               last_dir_{0};
-        static const uint8_t PWM_DEADBAND    = 3;
-        static const uint8_t MOTOR_START_PWM = 20;
+        static const uint8_t PWM_DEADBAND    = 5;
+        static const uint8_t MOTOR_START_PWM = 0;
 };
 
 class Odometry {
@@ -158,15 +158,15 @@ class Odometry {
             const long c2 = enc2_.getCount();
             const long c3 = enc3_.getCount();
 
-            const long dc1 = (c1 - prev_count1_) * ENCODER_SIGN_1;
-            const long dc2 = (c2 - prev_count2_) * ENCODER_SIGN_2;
-            const long dc3 = (c3 - prev_count3_) * ENCODER_SIGN_3;
+            long dc1 = (c1 - prev_count1_) * ENCODER_SIGN_1;
+            long dc2 = (c2 - prev_count2_) * ENCODER_SIGN_2;
+            long dc3 = (c3 - prev_count3_) * ENCODER_SIGN_3;
 
             if (labs(dc1) > 200 || labs(dc2) > 200 || labs(dc3) > 200) {
-                prev_count1_ = c1;
-                prev_count2_ = c2;
-                prev_count3_ = c3;
-                return;
+
+                dc1 = 0;
+                dc2 = 0;
+                dc3 = 0;
             }
 
             prev_count1_ = c1;
@@ -440,7 +440,11 @@ class Robot {
             const double desired_heading = atan2(ey, ex);
             double       next_v          = 0.0;
 
-            double distance     = hypot(ex, ey);
+            double distance = hypot(ex, ey);
+            if (distance < POS_DEADZONE_MM) {
+                omni_wheels.move(0, 0, 0);
+                return;
+            }
             double current_v    = hypot(now_vx_world, now_vy_world);
             double dec_distance = (current_v * current_v) / (2.0 * MAX_ACC + 1e-9);
 
@@ -456,8 +460,16 @@ class Robot {
             case State::Accelerate:
                 next_v = min(current_v + dv, MAX_VEL); // 最大速度で制限
                 break;
-            case State::Decelerate: next_v = max(current_v - dv, MIN_VEL); break;
-            case State::Stop: next_v = 0; break;
+            case State::Decelerate: next_v = max(current_v - dv, 0.); break;
+            case State::Stop:
+                next_v = 0;
+                vx_pid.reset();
+                vy_pid.reset();
+                theta_pos_pid.reset();
+
+                omni_wheels.move(0, 0, 0);
+                return;
+                break;
             }
             double target_vx = next_v * cos(desired_heading);
 
@@ -500,7 +512,7 @@ class Robot {
         pwm         motor_pwm{0, 0, 0};
         bool        stopped_{false};
 
-        const double  POS_DEADZONE_MM   = 1.0;
+        const double  POS_DEADZONE_MM   = 10.0;
         const double  THETA_STOP_RAD    = 2.0 * PI / 180.0;
         const double  THETA_RELEASE_RAD = 5.0 * PI / 180.0;
         const double  OMEGA_STOP_RAD_S  = 0.05;
@@ -512,7 +524,7 @@ class Robot {
         double cmd_y_mm_{0.0};
         double cmd_theta_rad_{0.0};
 
-        const double MAX_ACC = 1000.;
+        const double MAX_ACC = 10000.;
         const double MAX_VEL = 500.;
         const double MIN_VEL = 30.;
 
