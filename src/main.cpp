@@ -523,7 +523,7 @@ class Robot {
         double cmd_theta_rad_{0.0};
         double command_v_{0};
 
-        const double MAX_ACC = 3000.;
+        const double MAX_ACC = 1500.;
         const double MAX_VEL = 1000.;
         const double MIN_VEL = 0.;
 
