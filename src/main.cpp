@@ -23,8 +23,6 @@ const int8_t W1_SIGN = -1;
 const int8_t W2_SIGN = -1;
 const int8_t W3_SIGN = -1;
 
-const double USER_SIGN = 1.0;
-
 const double ENC_RESOLUTION        = 4096;
 const double OD_RADIUS             = 30;
 const double ROBOT_TO_ODO_RADIUS   = 210;
@@ -39,15 +37,15 @@ const double COUNTS_PER_MM = (ENC_RESOLUTION * GEAR_RATIO) / (PI * OD_RADIUS * 2
 
 ESP32Encoder enc1, enc2, enc3;
 
-const double  MAX_VX_CMD_MM_S     = 500.0;
-const double  MAX_VY_CMD_MM_S     = 500.0;
-const int16_t PWM_LIMIT           = 255;
-const double  INTEGRAL_MAX        = 10.0;
-const double  MAX_OMEGA_CMD_RAD_S = 1.; // 角速度上限[rad/s]
+const double   MAX_VX_CMD_MM_S     = 500.0;
+const double   MAX_VY_CMD_MM_S     = 500.0;
+const uint16_t PWM_LIMIT           = 255;
+const double   INTEGRAL_MAX        = 10.0;
+const double   MAX_OMEGA_CMD_RAD_S = 1.; // 角速度上限[rad/s]
 
 SpeedPID    vx_pid(0.8, 0, 0.0, -MAX_VX_CMD_MM_S, MAX_VX_CMD_MM_S, -INTEGRAL_MAX, INTEGRAL_MAX);
 SpeedPID    vy_pid(0.8, 0, 0.0, -MAX_VY_CMD_MM_S, MAX_VY_CMD_MM_S, -INTEGRAL_MAX, INTEGRAL_MAX);
-PositionPid theta_pos_pid(0.2, 0., 0.0, -MAX_OMEGA_CMD_RAD_S, MAX_OMEGA_CMD_RAD_S, -INTEGRAL_MAX, INTEGRAL_MAX);
+PositionPid theta_pos_pid(1., 0., 0.0, -MAX_OMEGA_CMD_RAD_S, MAX_OMEGA_CMD_RAD_S, -INTEGRAL_MAX, INTEGRAL_MAX);
 
 struct Position {
         double x;
@@ -85,7 +83,7 @@ class Motor {
 
         void begin() {
             pinMode(pinDir_, OUTPUT);
-            ledcSetup(pwmCh_, 12800, 8);
+            ledcSetup(pwmCh_, 20000, 8);
             ledcAttachPin(pinPwm_, pwmCh_);
         }
 
@@ -122,7 +120,7 @@ class Motor {
         uint8_t              pwmCh_;
         int8_t               direction_;
         int8_t               last_dir_{0};
-        static const uint8_t PWM_DEADBAND    = 5;
+        static const uint8_t PWM_DEADBAND    = 3;
         static const uint8_t MOTOR_START_PWM = 0;
 };
 
@@ -164,10 +162,13 @@ class Odometry {
 
             if (labs(dc1) > 200 || labs(dc2) > 200 || labs(dc3) > 200) {
 
-                dc1 = 0;
-                dc2 = 0;
-                dc3 = 0;
+                if (labs(dc1) > 200) dc1 = last_dc1_;
+                if (labs(dc2) > 200) dc2 = last_dc2_;
+                if (labs(dc3) > 200) dc3 = last_dc3_;
             }
+            last_dc1_ = dc1;
+            last_dc2_ = dc2;
+            last_dc3_ = dc3;
 
             prev_count1_ = c1;
             prev_count2_ = c2;
@@ -209,9 +210,12 @@ class Odometry {
         ESP32Encoder& enc2_;
         ESP32Encoder& enc3_;
 
-        long prev_count1_{0};
-        long prev_count2_{0};
-        long prev_count3_{0};
+        long   prev_count1_{0};
+        long   prev_count2_{0};
+        long   prev_count3_{0};
+        double last_dc1_{0};
+        double last_dc2_{0};
+        double last_dc3_{0};
 
         Position        pos_{0., 0., 0.};
         Position        vel_{0., 0., 0.};
@@ -440,13 +444,17 @@ class Robot {
             const double desired_heading = atan2(ey, ex);
             double       next_v          = 0.0;
 
-            double distance = hypot(ex, ey);
-            if (distance < POS_DEADZONE_MM) {
-                omni_wheels.move(0, 0, 0);
-                return;
-            }
+            double distance     = hypot(ex, ey);
             double current_v    = hypot(now_vx_world, now_vy_world);
-            double dec_distance = (current_v * current_v) / (2.0 * MAX_ACC + 1e-9);
+            double dec_distance = (command_v_ * command_v_) / (2.0 * MAX_ACC);
+
+            if (stopped_) {
+
+                if (dist_err > POS_DEADZONE_MM || fabs(th_err) > THETA_RELEASE_RAD) {
+
+                    stopped_ = false;
+                }
+            }
 
             if (stopped_) {
                 state = State::Stop;
@@ -457,23 +465,12 @@ class Robot {
             }
 
             switch (state) {
-            case State::Accelerate:
-                next_v = min(current_v + dv, MAX_VEL); // 最大速度で制限
-                break;
-            case State::Decelerate: next_v = max(current_v - dv, 0.); break;
-            case State::Stop:
-                next_v = 0;
-                vx_pid.reset();
-                vy_pid.reset();
-                theta_pos_pid.reset();
-
-                omni_wheels.move(0, 0, 0);
-                return;
-                break;
+            case State::Accelerate: command_v_ = min(command_v_ + dv, MAX_VEL); break;
+            case State::Decelerate: command_v_ = max(command_v_ - dv, MIN_VEL); break;
+            case State::Stop: command_v_ = 0; break;
             }
-            double target_vx = next_v * cos(desired_heading);
-
-            double target_vy = next_v * sin(desired_heading);
+            double target_vx = command_v_ * cos(desired_heading);
+            double target_vy = command_v_ * sin(desired_heading);
 
             double actual_vx = now_vx_world;
             double actual_vy = now_vy_world;
@@ -502,6 +499,7 @@ class Robot {
                     Serial.printf("esp_now_send err=%d\n", res);
                 }
             }
+            // Serial.printf()
         }
 
     private:
@@ -515,7 +513,7 @@ class Robot {
         const double  POS_DEADZONE_MM   = 10.0;
         const double  THETA_STOP_RAD    = 2.0 * PI / 180.0;
         const double  THETA_RELEASE_RAD = 5.0 * PI / 180.0;
-        const double  OMEGA_STOP_RAD_S  = 0.05;
+        const double  OMEGA_STOP_RAD_S  = 0.5;
         const double  V_STOP_MM_S       = 1.0;
         unsigned long stop_candidate_since_ms_{0};
 
@@ -523,12 +521,13 @@ class Robot {
         double cmd_x_mm_{0.0};
         double cmd_y_mm_{0.0};
         double cmd_theta_rad_{0.0};
+        double command_v_{0};
 
-        const double MAX_ACC = 10000.;
-        const double MAX_VEL = 500.;
-        const double MIN_VEL = 30.;
+        const double MAX_ACC = 3000.;
+        const double MAX_VEL = 1000.;
+        const double MIN_VEL = 0.;
 
-        const double MAX_SPEED_MM_S = 500.0;
+        const double MAX_SPEED_MM_S = 13000.0;
 
         enum class State {
             Accelerate,
